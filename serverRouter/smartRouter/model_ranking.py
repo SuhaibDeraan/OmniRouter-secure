@@ -27,14 +27,17 @@ def rank_models(models_aggregated, max_latency, max_cost, model_list):
                         "cost": best_list_model[1]['cost'], "latency": best_list_model[1]['latency'],
                         "message": "No models meet criteria, selecting best model from given models"}
 
-    # Return empty dict if no models meet criteria
+    # No model satisfies the constraints — fall back to a safe default.
+    # Use the same result shape as the normal path so downstream consumers
+    # (smartRouter/main.py) don't hit a KeyError.
     if not filtered_models:
-        return {"gpt-4o-mini": {
-            "accuracy": 1,
+        return {
+            "model": "gpt-4o-mini",
+            "score": 0,
             "cost": 0.6,
             "latency": 0.56,
-            "message": "No models meet criteria, selecting default model"
-        }}
+            "message": "No models meet criteria, selecting default model",
+        }
     
     # Find model with highest accuracy
     best_model = max(filtered_models.items(), key=lambda x: x[1]['accuracy'])
