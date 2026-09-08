@@ -156,7 +156,17 @@ class ModelInfo(BaseModel):
     )
 
 class SmartRouterRequest(BaseModel):
-    messages: list[ChatMessage] = Field(..., description="List of chat messages")
-    max_latency: str = Field(..., description="Maximum latency preference (LIGHTNING, FAST, BALANCED, PERFORMANCE)")
-    max_cost: str = Field(..., description="Maximum cost preference (CHEAP, BALANCED, PREMIUM, PERFORMANCE)")
-    model_list: list = Field(..., description="List of models to consider (optional)")
+    messages: List[ChatMessage] = Field(..., description="List of chat messages")
+    max_latency: Union[str, float] = Field(
+        ...,
+        description="Maximum latency: a preference name (LIGHTNING, FAST, BALANCED, "
+        "PERFORMANCE) or a number of seconds",
+    )
+    max_cost: Union[str, float] = Field(
+        ...,
+        description="Maximum cost: a preference name (CHEAP, BALANCED, PREMIUM, "
+        "PERFORMANCE) or a number of dollars per million tokens",
+    )
+    model_list: List[str] = Field(
+        default_factory=list, description="Optional list of model ids to consider"
+    )
