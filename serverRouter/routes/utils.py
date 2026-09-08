@@ -1,16 +1,17 @@
 from fastapi import HTTPException, Security
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from serverRouter.core import config
-from datetime import datetime
+
 security = HTTPBearer()
 
 def verify_api_key(credentials: HTTPAuthorizationCredentials = Security(security)) -> str:
     if credentials.credentials not in config.VALID_API_KEYS:
         raise HTTPException(
             status_code=401,
-            detail=f"Invalid API key"
+            detail="Invalid API key"
         )
-    
+
+    # Also 401s if the key's backing document disappeared since the last snapshot.
     user_id = get_user_id_by_api_key(credentials.credentials)
     user_usage = get_user_usage(user_id)
     if user_usage['total_tokens'] >= config.MAX_TOKENS:
@@ -22,41 +23,60 @@ def verify_api_key(credentials: HTTPAuthorizationCredentials = Security(security
 
 def get_user_id_by_api_key(api_key):
     """
-    Get the user associated with the provided API key.
-    
+    Get the user id associated with the provided API key.
+
+    Raises HTTP 401 (never 500) when the key has no backing document — e.g. it
+    was revoked after the last VALID_API_KEYS snapshot — or the document has no
+    ``userid``.
+
     Args:
         api_key (str): The API key to look up
-        
+
     Returns:
-        dict: User data if found, None otherwise
+        str: The associated user id
     """
     api_key_doc = config.db.collection('api_keys').document(api_key).get()
-    api_key_data = api_key_doc.to_dict()
-    user_id = api_key_data.get('userid')
+    api_key_data = api_key_doc.to_dict() if api_key_doc is not None else None
+    user_id = (api_key_data or {}).get('userid')
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Invalid API key")
     return user_id
 
 def add_usage_to_user(user_id, token_count):
     """
-    Add usage to the user's document in Firestore.
-    
+    Atomically add token/message usage to the user's document in Firestore.
+
+    Uses server-side field transforms so concurrent requests cannot clobber
+    each other's increments, and creates the ``usage`` map if it is absent.
+
     Args:
         user_id (str): The ID of the user to add usage to
         token_count (int): The number of tokens to add
     """
-    user_doc = config.db.collection('users').document(user_id).get()
-    user_data = user_doc.to_dict()
-    user_data['usage']['total_tokens'] += token_count
-    user_data['usage']['total_messages'] += 1
-    user_data['usage']['last_updated'] = datetime.now()
-    config.db.collection('users').document(user_id).update(user_data)
+    config.db.collection('users').document(user_id).set(
+        {
+            'usage': {
+                'total_tokens': config.firestore.Increment(token_count),
+                'total_messages': config.firestore.Increment(1),
+                'last_updated': config.firestore.SERVER_TIMESTAMP,
+            }
+        },
+        merge=True,
+    )
 
 def get_user_usage(user_id):
     """
-    Get the usage of the user's document in Firestore.
+    Get the user's usage as a dict, treating any missing document or field as
+    zero so callers never hit a TypeError / 500.
     """
     user_doc = config.db.collection('users').document(user_id).get()
-    user_data = user_doc.to_dict()
-    return user_data.get('usage', 0)
+    user_data = user_doc.to_dict() if user_doc is not None else None
+    usage = (user_data or {}).get('usage') or {}
+    return {
+        'total_tokens': usage.get('total_tokens') or 0,
+        'total_messages': usage.get('total_messages') or 0,
+        'last_updated': usage.get('last_updated'),
+    }
 
 def get_model_and_provider(model_id: str, models_dict):
     """Get model info and provider for a given model ID."""
