@@ -23,8 +23,8 @@ def SmartRouter(messages, max_latency, max_cost, model_list):
     max_cost_enum = CostType.from_value(max_cost)
     
     # For numeric processing, extract the numeric values if they're enum instances
-    latency_value = max_latency_enum.value_in_seconds if isinstance(max_latency_enum, LatencyType) else max_latency
-    cost_value = max_cost_enum.value_in_dollars if isinstance(max_cost_enum, CostType) else max_cost
+    latency_value = max_latency_enum.value_in_seconds if isinstance(max_latency_enum, LatencyType) else max_latency_enum
+    cost_value = max_cost_enum.value_in_dollars if isinstance(max_cost_enum, CostType) else max_cost_enum
 
     metadata = {"status": "starting", "message": f"Routing to a {max_latency} speed model with {max_cost} cost", "data": {"max_latency": max_latency, "max_cost": max_cost}}
     yield {"event": "metadata", "data": json.dumps(metadata)}  # Structured event

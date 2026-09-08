@@ -25,16 +25,32 @@ class LatencyType(str, Enum):
 
     @classmethod
     def from_value(cls, value: Union[str, float, "LatencyType"]) -> Union[float, "LatencyType"]:
-        """Convert a string, float, or enum to the appropriate value."""
+        """Convert an enum member, preference name, or number to a usable value.
+
+        Accepts an enum member, one of the preference names (case-insensitive),
+        or a raw number / numeric string (used as an explicit limit). Any other
+        value raises ValueError so the caller can return a 4xx.
+        """
         if isinstance(value, cls):
             return value
+        if isinstance(value, bool):
+            raise ValueError(f"Invalid latency type: {value!r}")
+        if isinstance(value, (int, float)):
+            return float(value)
         if isinstance(value, str):
             try:
                 return cls(value.lower())
             except ValueError:
+                pass
+            try:
+                return float(value)
+            except ValueError:
                 valid_options = [e.name for e in cls]
-                raise ValueError(f"Invalid latency type: {value}. Choose from {valid_options}")
-        return value  # Return as is if it's a numeric value
+                raise ValueError(
+                    f"Invalid latency type: {value}. "
+                    f"Choose from {valid_options} or pass a number"
+                )
+        raise ValueError(f"Invalid latency type: {value!r}")
 
 
 class CostType(str, Enum):
@@ -61,15 +77,31 @@ class CostType(str, Enum):
 
     @classmethod
     def from_value(cls, value: Union[str, float, "CostType"]) -> Union[float, "CostType"]:
-        """Convert a string, float, or enum to the appropriate value."""
+        """Convert an enum member, preference name, or number to a usable value.
+
+        Accepts an enum member, one of the preference names (case-insensitive),
+        or a raw number / numeric string (used as an explicit limit). Any other
+        value raises ValueError so the caller can return a 4xx.
+        """
         if isinstance(value, cls):
             return value
+        if isinstance(value, bool):
+            raise ValueError(f"Invalid cost type: {value!r}")
+        if isinstance(value, (int, float)):
+            return float(value)
         if isinstance(value, str):
             try:
                 return cls(value.lower())
             except ValueError:
+                pass
+            try:
+                return float(value)
+            except ValueError:
                 valid_options = [e.name for e in cls]
-                raise ValueError(f"Invalid cost type: {value}. Choose from {valid_options}")
-        return value  # Return as is if it's a numeric value
+                raise ValueError(
+                    f"Invalid cost type: {value}. "
+                    f"Choose from {valid_options} or pass a number"
+                )
+        raise ValueError(f"Invalid cost type: {value!r}")
 
 
