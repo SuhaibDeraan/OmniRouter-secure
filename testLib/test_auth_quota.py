@@ -120,13 +120,14 @@ from serverRouter.routes import utils  # noqa: E402
 @pytest.fixture
 def db():
     fake = FakeFirestore()
-    _config.db = fake
-    _config.VALID_API_KEYS = set()
-    _config.MAX_TOKENS = 1000
-    # keep utils pointed at the same stub module
+    # utils.config IS this module object; set every surface it reads so the test
+    # is independent of whichever module first populated sys.modules.
     utils.config.db = fake
-    utils.config.VALID_API_KEYS = _config.VALID_API_KEYS
-    utils.config.MAX_TOKENS = _config.MAX_TOKENS
+    utils.config.VALID_API_KEYS = set()
+    utils.config.MAX_TOKENS = 1000
+    utils.config.firestore = types.SimpleNamespace(
+        Increment=_Increment, SERVER_TIMESTAMP=_SERVER_TIMESTAMP
+    )
     return fake
 
 
