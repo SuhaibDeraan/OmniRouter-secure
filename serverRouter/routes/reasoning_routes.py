@@ -1,8 +1,14 @@
-import json
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException
-from serverRouter.routes.utils import verify_api_key, get_model_and_provider, add_usage_to_user
+from starlette.concurrency import run_in_threadpool
+
+from serverRouter.routes.utils import (
+    verify_api_key,
+    get_model_and_provider,
+    add_usage_to_user,
+    usage_total_from_chunk,
+)
 from serverRouter.core.datamodels import (
     ChatReasoningRequest,
     ChatReasoningResponse,
@@ -40,7 +46,7 @@ async def create_reasoning_completion(
 
         # Track usage
         total_tokens = response.usage.total_tokens
-        add_usage_to_user(user_id, total_tokens)
+        await run_in_threadpool(add_usage_to_user, user_id, total_tokens)
 
         return response
     except HTTPException:
@@ -76,14 +82,23 @@ async def create_reasoning_completion_stream(
         # Get streaming response
         response = await provider.chat_reason_complete_stream(request)
 
-        # Track usage from stream data
+        # Track usage from stream data. Providers emit a cumulative total; record
+        # only its growth so repeated/malformed usage chunks can't double-count or
+        # crash the stream.
         async def usage_tracking_generator():
+            reported_total = 0
             async for chunk in response.body_iterator:
-                yield chunk
-                if chunk.get("event") == "usage":
-                    usage_data = json.loads(chunk.get("data", {}))
-                    total_tokens = usage_data.get("total_tokens", 0)
-                    add_usage_to_user(user_id, total_tokens)
+                yield chunk  # forward every provider chunk unchanged
+
+                total = usage_total_from_chunk(chunk)
+                if total is None or total <= reported_total:
+                    continue
+                delta = total - reported_total
+                reported_total = total
+                try:
+                    await run_in_threadpool(add_usage_to_user, user_id, delta)
+                except Exception:
+                    logger.exception("Failed to record streamed reasoning usage")
 
         return EventSourceResponse(usage_tracking_generator())
     except HTTPException:

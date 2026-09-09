@@ -1,11 +1,14 @@
-import json
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException
+from starlette.concurrency import run_in_threadpool
+
 from serverRouter.routes.utils import (
     verify_api_key,
     get_model_and_provider,
     add_usage_to_user,
+    coerce_int as _coerce_int,
+    usage_total_from_chunk as _usage_total_from_chunk,
 )
 from serverRouter.core.datamodels import (
     ChatCompletionRequest,
@@ -19,38 +22,6 @@ from sse_starlette.sse import EventSourceResponse
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/v1", tags=["completions"])
-
-
-def _coerce_int(value):
-    """Best-effort convert a token count to int; None if it isn't a number."""
-    if isinstance(value, bool):
-        return None
-    if isinstance(value, int):
-        return value
-    try:
-        return int(float(value))
-    except (TypeError, ValueError):
-        return None
-
-
-def _usage_total_from_chunk(chunk):
-    """Return total_tokens from a well-formed 'usage' SSE chunk, else None.
-
-    Tolerates non-dict chunks, missing/renamed fields, non-string ``data`` and
-    invalid JSON without raising, so a malformed chunk never breaks the stream
-    or corrupts usage accounting.
-    """
-    if not isinstance(chunk, dict) or chunk.get("event") != "usage":
-        return None
-    data = chunk.get("data")
-    if isinstance(data, (str, bytes, bytearray)):
-        try:
-            data = json.loads(data)
-        except (ValueError, TypeError):
-            return None
-    if not isinstance(data, dict):
-        return None
-    return _coerce_int(data.get("total_tokens"))
 
 
 @router.post("/chat/completions")
@@ -67,7 +38,7 @@ async def create_chat_completion(
 
         usage = getattr(response, "usage", None) or {}
         token_count = _coerce_int(usage.get("total_tokens")) or 0
-        add_usage_to_user(user_id, token_count)
+        await run_in_threadpool(add_usage_to_user, user_id, token_count)
         return response
     except HTTPException:
         # 400 / 401 / 429 / ProviderError etc. are already the right response.
@@ -106,7 +77,7 @@ async def create_chat_completion_stream(
             delta = total - reported_total
             reported_total = total
             try:
-                add_usage_to_user(user_id, delta)
+                await run_in_threadpool(add_usage_to_user, user_id, delta)
             except Exception:
                 logger.exception("Failed to record streamed usage")
 
@@ -134,7 +105,7 @@ async def create_image(
         # Assigning images a token/quota cost is an open product decision.
         reported = getattr(response, "usage", None)
         token_count = _coerce_int(reported.get("total_tokens")) if isinstance(reported, dict) else None
-        add_usage_to_user(user_id, token_count or 0)
+        await run_in_threadpool(add_usage_to_user, user_id, token_count or 0)
         return response
     except HTTPException:
         raise

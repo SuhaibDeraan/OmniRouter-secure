@@ -205,3 +205,28 @@ def test_successful_streaming_response(client, monkeypatch, usage_calls):
     assert "event: content" in resp.text
     assert "event: usage" in resp.text
     assert usage_calls == [("user-1", 42)]
+
+
+def test_stream_malformed_usage_chunk_does_not_crash(client, monkeypatch, usage_calls):
+    async def _events():
+        yield {"event": "usage"}  # no data key -> previously json.loads({}) TypeError
+        yield {"event": "usage", "data": "{not json"}
+        yield {"event": "content", "data": json.dumps({"content": "still here"})}
+
+    _set_route(monkeypatch, provider=FakeProvider(response=EventSourceResponse(_events())))
+    resp = client.post("/v1/reason/completions/stream", json=_body())
+    assert resp.status_code == 200
+    assert "still here" in resp.text
+    assert usage_calls == []
+
+
+def test_stream_cumulative_usage_is_not_double_counted(client, monkeypatch, usage_calls):
+    async def _events():
+        yield {"event": "usage", "data": json.dumps({"total_tokens": 100})}
+        yield {"event": "content", "data": json.dumps({"content": "x"})}
+        yield {"event": "usage", "data": json.dumps({"total_tokens": 150})}
+
+    _set_route(monkeypatch, provider=FakeProvider(response=EventSourceResponse(_events())))
+    resp = client.post("/v1/reason/completions/stream", json=_body())
+    assert resp.status_code == 200
+    assert sum(n for _, n in usage_calls) == 150

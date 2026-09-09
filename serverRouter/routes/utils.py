@@ -1,8 +1,42 @@
+import json
+
 from fastapi import HTTPException, Security
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from serverRouter.core import config
 
 security = HTTPBearer()
+
+
+def coerce_int(value):
+    """Best-effort convert a token count to int; None if it isn't a number."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def usage_total_from_chunk(chunk):
+    """Return total_tokens from a well-formed 'usage' SSE chunk, else None.
+
+    Tolerates non-dict chunks, missing/renamed fields, non-string ``data`` and
+    invalid JSON without raising, so a malformed chunk never breaks a stream or
+    corrupts usage accounting.
+    """
+    if not isinstance(chunk, dict) or chunk.get("event") != "usage":
+        return None
+    data = chunk.get("data")
+    if isinstance(data, (str, bytes, bytearray)):
+        try:
+            data = json.loads(data)
+        except (ValueError, TypeError):
+            return None
+    if not isinstance(data, dict):
+        return None
+    return coerce_int(data.get("total_tokens"))
 
 def verify_api_key(credentials: HTTPAuthorizationCredentials = Security(security)) -> str:
     """Authenticate the bearer token and enforce the token quota.
