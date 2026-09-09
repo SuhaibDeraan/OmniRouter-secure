@@ -1,5 +1,13 @@
-from fastapi import APIRouter, Depends
-from serverRouter.routes.utils import *
+import json
+import logging
+
+from fastapi import APIRouter, Depends, HTTPException
+from serverRouter.routes.utils import (
+    verify_api_key,
+    get_model_and_provider,
+    get_user_id_by_api_key,
+    add_usage_to_user,
+)
 from serverRouter.core.datamodels import (
     ChatCompletionRequest,
     ChatCompletionResponse,
@@ -8,9 +16,43 @@ from serverRouter.core.datamodels import (
 )
 from serverRouter.core.models import CHAT_MODELS, IMAGE_MODELS
 from sse_starlette.sse import EventSourceResponse
-import json
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/v1", tags=["completions"])
+
+
+def _coerce_int(value):
+    """Best-effort convert a token count to int; None if it isn't a number."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def _usage_total_from_chunk(chunk):
+    """Return total_tokens from a well-formed 'usage' SSE chunk, else None.
+
+    Tolerates non-dict chunks, missing/renamed fields, non-string ``data`` and
+    invalid JSON without raising, so a malformed chunk never breaks the stream
+    or corrupts usage accounting.
+    """
+    if not isinstance(chunk, dict) or chunk.get("event") != "usage":
+        return None
+    data = chunk.get("data")
+    if isinstance(data, (str, bytes, bytearray)):
+        try:
+            data = json.loads(data)
+        except (ValueError, TypeError):
+            return None
+    if not isinstance(data, dict):
+        return None
+    return _coerce_int(data.get("total_tokens"))
+
 
 @router.post("/chat/completions")
 async def create_chat_completion(
@@ -18,36 +60,61 @@ async def create_chat_completion(
     api_key: str = Depends(verify_api_key)
 ) -> ChatCompletionResponse:
     """Create a chat completion using the specified model."""
-    model_name, provider = get_model_and_provider(request.model, CHAT_MODELS)
-    request.model = model_name
-    user_id = get_user_id_by_api_key(api_key)
-    response = await provider.chat_complete(request)
-    token_count = response.usage['total_tokens']
-    add_usage_to_user(user_id, token_count)
-    return response
+    try:
+        model_name, provider = get_model_and_provider(request.model, CHAT_MODELS)
+        request.model = model_name
+        user_id = get_user_id_by_api_key(api_key)
+
+        response = await provider.chat_complete(request)
+
+        usage = getattr(response, "usage", None) or {}
+        token_count = _coerce_int(usage.get("total_tokens")) or 0
+        add_usage_to_user(user_id, token_count)
+        return response
+    except HTTPException:
+        # 400 / 401 / 429 / ProviderError etc. are already the right response.
+        raise
+    except Exception:
+        logger.exception("Unexpected error in chat completion")
+        raise HTTPException(status_code=502, detail="Chat completion provider request failed")
+
 
 @router.post("/chat/completions/stream")
 async def create_chat_completion_stream(
     request: ChatCompletionRequest,
     api_key: str = Depends(verify_api_key)
 ):
-    """Create a chat completion using the specified model."""
-    model_name, provider = get_model_and_provider(request.model, CHAT_MODELS)
-    request.model = model_name
-    user_id = get_user_id_by_api_key(api_key)
-    
-    response = await provider.chat_complete_stream(request)
+    """Create a streaming chat completion using the specified model."""
+    try:
+        model_name, provider = get_model_and_provider(request.model, CHAT_MODELS)
+        request.model = model_name
+        user_id = get_user_id_by_api_key(api_key)
+        response = await provider.chat_complete_stream(request)
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("Unexpected error starting chat completion stream")
+        raise HTTPException(status_code=502, detail="Chat completion provider request failed")
 
     async def usage_tracking_generator():
+        # Providers emit a cumulative total_tokens; record only the growth so
+        # repeated or malformed usage chunks can't double-count or crash the stream.
+        reported_total = 0
         async for chunk in response.body_iterator:
-            yield chunk
-            if chunk.get("event") == "usage":
-                usage_data = json.loads(chunk.get("data", {}))
-                total_tokens = usage_data.get("total_tokens", 0)
-                add_usage_to_user(user_id, total_tokens)
-    
+            yield chunk  # forward every provider chunk unchanged
+
+            total = _usage_total_from_chunk(chunk)
+            if total is None or total <= reported_total:
+                continue
+            delta = total - reported_total
+            reported_total = total
+            try:
+                add_usage_to_user(user_id, delta)
+            except Exception:
+                logger.exception("Failed to record streamed usage")
+
     return EventSourceResponse(usage_tracking_generator())
-    
+
 
 @router.post("/images/generate")
 async def create_image(
