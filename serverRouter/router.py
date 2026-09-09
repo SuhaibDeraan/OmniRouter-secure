@@ -1,14 +1,14 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from serverRouter.core.datamodels import ModelProvider
-from serverRouter.providers.anthropic.provider import AnthropicProvider
-from serverRouter.providers.openai.provider import OpenAIProvider
-from serverRouter.providers.gemini.provider import GeminiProvider
-from serverRouter.providers.deepseek.provider import DeepSeekProvider
-from serverRouter.providers.together.provider import TogetherAIProvider
-from serverRouter.providers.stablediffusion.provider import StableDiffusionProvider
-from serverRouter.routes import model_routes, completion_routes, smart_routes, reasoning_routes
-from serverRouter.core.config import PROVIDERS
+
+from serverRouter.core.providers import initialize_providers
+from serverRouter.routes import (
+    model_routes,
+    completion_routes,
+    smart_routes,
+    reasoning_routes,
+    health_routes,
+)
 
 
 app = FastAPI(title="OmniLLM", description="One Key, One API, Hundreds of Models")
@@ -22,28 +22,16 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Function to initialize providers
-def initialize_providers():
-    global PROVIDERS
-    try:
-        PROVIDERS.update({
-            ModelProvider.OPENAI: OpenAIProvider(),
-            ModelProvider.ANTHROPIC: AnthropicProvider(),
-            ModelProvider.GEMINI: GeminiProvider(),
-            # ModelProvider.DEEPSEEK: DeepSeekProvider(), # NOT Fast Enough, using together instead
-            ModelProvider.TOGETHER: TogetherAIProvider(),
-            ModelProvider.STABLEDIFFUSION: StableDiffusionProvider()
-        })
-    except Exception as e:
-        raise
-
-# # Initialize providers during startup
+# Initialize providers during startup. Each provider is constructed
+# independently -- a missing credential for one does not abort the others.
 initialize_providers()
-# # Include routers from separate files
+
+# Include routers from separate files
 app.include_router(model_routes.router)
 app.include_router(completion_routes.router)
 app.include_router(smart_routes.router)
 app.include_router(reasoning_routes.router)
+app.include_router(health_routes.router)
 
 
 @app.get("/")
@@ -52,5 +40,3 @@ async def root():
 
 
 # uvicorn serverRouter.router:app --reload
-
-

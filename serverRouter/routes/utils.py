@@ -88,10 +88,13 @@ def get_model_and_provider(model_id: str, models_dict):
         )
     
     provider = config.PROVIDERS.get(model_info.provider)
-    if not provider:
+    if provider is None:
+        # The provider for this model is not configured / not available on this
+        # server (e.g. its credentials are missing). This is a server-side
+        # availability problem, not a client error.
         raise HTTPException(
-            status_code=500,
-            detail=f"Provider not configured: {model_info.provider}"
+            status_code=503,
+            detail=f"Model '{model_id}' is temporarily unavailable: its provider is not configured on this server."
         )
-    
+
     return model_info.name, provider
