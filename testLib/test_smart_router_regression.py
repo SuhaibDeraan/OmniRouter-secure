@@ -199,6 +199,32 @@ def test_unknown_task_id_classification_returns_default(client):
     assert resp.json()["model"] == "gpt-4o-mini"
 
 
+# --------------------------------------------------------------------------
+# Router-internal failure (e.g. embedding service down) -> 502, no leak
+# --------------------------------------------------------------------------
+def _boom(_query):
+    raise RuntimeError("embedding backend /srv/internal/embed.py unreachable")
+
+
+def test_router_internal_failure_is_502(client, monkeypatch):
+    monkeypatch.setattr(sr_main, "classify_prompt", _boom)
+    resp = client.post("/v1/smartRouter", json=_body())
+    assert resp.status_code == 502
+    body = resp.text
+    for leak in ("Traceback", "RuntimeError", "/srv", "embed.py"):
+        assert leak not in body
+    assert resp.json()["detail"] == "Smart routing failed"
+
+
+def test_router_internal_failure_on_stream_emits_error_event(client, monkeypatch):
+    monkeypatch.setattr(sr_main, "classify_prompt", _boom)
+    resp = client.post("/v1/smartRouterStream", json=_body())
+    assert resp.status_code == 200  # stream opened before the failure
+    assert "event: error" in resp.text
+    for leak in ("Traceback", "RuntimeError", "/srv", "embed.py"):
+        assert leak not in resp.text
+
+
 # 12. model_list handling — supplied vs omitted
 def test_model_list_supplied_restricts_choice(client):
     set_classification({"coding": 1.0})

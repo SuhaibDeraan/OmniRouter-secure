@@ -14,21 +14,22 @@ def classify_prompt(query):
     """
     
     similar_tasks = task_manager.find_similar_tasks(query)
-    
-    # Normalize similarity scores to 0-1 range
-    min_score = min(score for _, score in similar_tasks)
-    max_score = max(score for _, score in similar_tasks)
-    score_range = max_score - min_score
-    
-    similar_tasks = [(task_id, (score - min_score) / score_range if (score - min_score) / score_range >= 0.5 else 0) 
-                    for task_id, score in similar_tasks]
-    
-    # Convert to dictionary, only including scores > 0
+    if not similar_tasks:
+        return {}
+
+    # Normalize similarity scores to the 0-1 range. If every score is identical
+    # (score_range == 0) the query matched all candidate tasks equally, so treat
+    # them all as fully relevant instead of dividing by zero.
+    scores = [score for _, score in similar_tasks]
+    min_score = min(scores)
+    score_range = max(scores) - min_score
+
     result = {}
-    for task_id, similarity in similar_tasks:
-        if similarity > 0:
-            result[task_id] = float(round(similarity, 4))
-            
+    for task_id, score in similar_tasks:
+        normalized = (score - min_score) / score_range if score_range else 1.0
+        if normalized >= 0.5:
+            result[task_id] = float(round(normalized, 4))
+
     return result
 
 
