@@ -122,6 +122,26 @@ async def create_image(
     api_key: str = Depends(verify_api_key)
 ) -> ImageGenerationResponse:
     """Generate images using the specified model."""
-    model_name, provider = get_model_and_provider(request.model, IMAGE_MODELS)
-    request.model = model_name
-    return await provider.generate_image(request)
+    try:
+        model_name, provider = get_model_and_provider(request.model, IMAGE_MODELS)
+        request.model = model_name
+        user_id = get_user_id_by_api_key(api_key)
+
+        response = await provider.generate_image(request)
+
+        # This codebase defines no token price for image generation: IMAGE_MODELS
+        # carry no tokenCost and ImageGenerationResponse has no usage field. We do
+        # NOT invent one. A successful image request is recorded once as a
+        # billable operation at 0 token cost (add_usage_to_user still bumps
+        # total_messages / last_updated, consistent with chat and reasoning). If a
+        # provider ever reports token usage we bill exactly that reported value.
+        # Assigning images a token/quota cost is an open product decision.
+        reported = getattr(response, "usage", None)
+        token_count = _coerce_int(reported.get("total_tokens")) if isinstance(reported, dict) else None
+        add_usage_to_user(user_id, token_count or 0)
+        return response
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("Unexpected error in image generation")
+        raise HTTPException(status_code=502, detail="Image generation provider request failed")

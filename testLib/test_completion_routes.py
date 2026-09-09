@@ -48,7 +48,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 from serverRouter.routes import completion_routes  # noqa: E402
 from serverRouter.routes.utils import verify_api_key  # noqa: E402
-from serverRouter.core.datamodels import ChatCompletionResponse  # noqa: E402
+from serverRouter.core.datamodels import ChatCompletionResponse, ImageGenerationResponse  # noqa: E402
 from serverRouter.core.exceptions import ProviderError  # noqa: E402
 
 
@@ -102,6 +102,12 @@ def _set_provider(monkeypatch, *, provider=None, raises=None):
             raise raises
         return MODEL, provider
     monkeypatch.setattr(completion_routes, "get_model_and_provider", fake_gmap)
+
+
+def _raise(exc):
+    def _dep():
+        raise exc
+    return _dep
 
 
 def _body():
@@ -263,3 +269,114 @@ def test_repeated_identical_usage_chunk_counts_once(client, monkeypatch, usage_c
     resp = client.post("/v1/chat/completions/stream", json=_body())
     assert resp.status_code == 200
     assert usage_calls == [("user-1", 100)]
+
+
+# --------------------------------------------------------------------------
+# Image generation
+# --------------------------------------------------------------------------
+IMAGE_MODEL = "dall-e-3"
+
+
+class FakeImageProvider:
+    def __init__(self, *, response=None, exc=None):
+        self._response = response
+        self._exc = exc
+
+    async def generate_image(self, request):
+        if self._exc:
+            raise self._exc
+        return self._response
+
+
+def _image_body():
+    return {"prompt": "a red bicycle", "model": IMAGE_MODEL, "n": 1}
+
+
+def _image_response(urls=("data:image/png;base64,AAA",)):
+    return ImageGenerationResponse(urls=list(urls), model=IMAGE_MODEL, provider="openai")
+
+
+def test_successful_image_generation(client, monkeypatch, usage_calls):
+    _set_provider(monkeypatch, provider=FakeImageProvider(response=_image_response()))
+    resp = client.post("/v1/images/generate", json=_image_body())
+    assert resp.status_code == 200
+    assert resp.json() == {
+        "urls": ["data:image/png;base64,AAA"],
+        "model": IMAGE_MODEL,
+        "provider": "openai",
+    }
+    # recorded once, at 0 token cost (no image price defined in the repo)
+    assert usage_calls == [("user-1", 0)]
+
+
+def test_image_http_exception_passes_through(client, monkeypatch, usage_calls):
+    _set_provider(monkeypatch, raises=HTTPException(status_code=400, detail="Unknown model: foo"))
+    resp = client.post("/v1/images/generate", json=_image_body())
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == "Unknown model: foo"
+    assert usage_calls == []
+
+
+def test_image_quota_gate_applies(client, monkeypatch, usage_calls):
+    # /images/generate is guarded by the same verify_api_key dependency as chat
+    client.app.dependency_overrides[verify_api_key] = _raise(HTTPException(status_code=429, detail="quota"))
+    _set_provider(monkeypatch, provider=FakeImageProvider(response=_image_response()))
+    resp = client.post("/v1/images/generate", json=_image_body())
+    assert resp.status_code == 429
+    assert usage_calls == []
+
+
+def test_image_provider_error_maps_to_its_status(client, monkeypatch, usage_calls):
+    _set_provider(monkeypatch, provider=FakeImageProvider(exc=ProviderError("Stable Diffusion API error: NSFW")))
+    resp = client.post("/v1/images/generate", json=_image_body())
+    assert resp.status_code == 500
+    assert resp.json()["detail"] == "Stable Diffusion API error: NSFW"
+    assert usage_calls == []  # failed generation is not billed
+
+
+def test_image_unexpected_exception_is_502_without_internals(client, monkeypatch, usage_calls):
+    _set_provider(monkeypatch, provider=FakeImageProvider(exc=RuntimeError("boom /srv/app/keys.py:3")))
+    resp = client.post("/v1/images/generate", json=_image_body())
+    assert resp.status_code == 502
+    body = resp.text
+    for leak in ("Traceback", "RuntimeError", "keys.py", "boom"):
+        assert leak not in body
+    assert resp.json()["detail"] == "Image generation provider request failed"
+    assert usage_calls == []
+
+
+def test_image_repeated_calls_do_not_double_count(client, monkeypatch, usage_calls):
+    _set_provider(monkeypatch, provider=FakeImageProvider(response=_image_response()))
+    client.post("/v1/images/generate", json=_image_body())
+    client.post("/v1/images/generate", json=_image_body())
+    assert usage_calls == [("user-1", 0), ("user-1", 0)]  # one per call, not two
+
+
+def test_image_response_without_usage_attr_records_zero(client, monkeypatch, usage_calls):
+    _set_provider(monkeypatch, provider=FakeImageProvider(response=_image_response()))
+    resp = client.post("/v1/images/generate", json=_image_body())
+    assert resp.status_code == 200
+    assert usage_calls == [("user-1", 0)]
+
+
+@pytest.mark.parametrize("bad_usage", [None, "oops", {"total_tokens": "nan"}, {"prompt": 1}, 123])
+def test_image_malformed_or_missing_usage_metadata_records_zero(client, monkeypatch, usage_calls, bad_usage):
+    obj = types.SimpleNamespace(
+        urls=["data:image/png;base64,AAA"], model=IMAGE_MODEL, provider="openai", usage=bad_usage
+    )
+    _set_provider(monkeypatch, provider=FakeImageProvider(response=obj))
+    resp = client.post("/v1/images/generate", json=_image_body())
+    assert resp.status_code == 200
+    assert usage_calls == [("user-1", 0)]
+
+
+def test_image_provider_reporting_token_usage_is_billed_as_reported(client, monkeypatch, usage_calls):
+    # forward-compat: if a provider ever returns usage, bill exactly that value
+    obj = types.SimpleNamespace(
+        urls=["data:image/png;base64,AAA"], model=IMAGE_MODEL, provider="together",
+        usage={"total_tokens": 50},
+    )
+    _set_provider(monkeypatch, provider=FakeImageProvider(response=obj))
+    resp = client.post("/v1/images/generate", json=_image_body())
+    assert resp.status_code == 200
+    assert usage_calls == [("user-1", 50)]
