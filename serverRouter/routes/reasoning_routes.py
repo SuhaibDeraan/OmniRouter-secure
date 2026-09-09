@@ -2,7 +2,7 @@ import json
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException
-from serverRouter.routes.utils import verify_api_key, get_model_and_provider, get_user_id_by_api_key, add_usage_to_user
+from serverRouter.routes.utils import verify_api_key, get_model_and_provider, add_usage_to_user
 from serverRouter.core.datamodels import (
     ChatReasoningRequest,
     ChatReasoningResponse,
@@ -18,7 +18,7 @@ router = APIRouter(prefix="/v1", tags=["reasoning"])
 @router.post("/reason/completions")
 async def create_reasoning_completion(
     request: ChatReasoningRequest,
-    api_key: str = Depends(verify_api_key)
+    user_id: str = Depends(verify_api_key)
 ) -> ChatReasoningResponse:
     """
     Create a reasoning completion using a model with extended thinking capabilities.
@@ -27,7 +27,6 @@ async def create_reasoning_completion(
     try:
         model_name, provider = get_model_and_provider(request.model, REASONING_MODELS)
         request.model = model_name
-        user_id = get_user_id_by_api_key(api_key)
 
         # Ensure the provider supports reasoning
         if not hasattr(provider, 'chat_reason_complete'):
@@ -54,7 +53,7 @@ async def create_reasoning_completion(
 @router.post("/reason/completions/stream")
 async def create_reasoning_completion_stream(
     request: ChatReasoningRequest,
-    api_key: str = Depends(verify_api_key)
+    user_id: str = Depends(verify_api_key)
 ):
     """
     Stream a reasoning completion using a model with extended thinking capabilities.
@@ -63,7 +62,6 @@ async def create_reasoning_completion_stream(
     try:
         model_name, provider = get_model_and_provider(request.model, REASONING_MODELS)
         request.model = model_name
-        user_id = get_user_id_by_api_key(api_key)
 
         # Ensure the provider supports reasoning
         if not hasattr(provider, 'chat_reason_complete_stream'):

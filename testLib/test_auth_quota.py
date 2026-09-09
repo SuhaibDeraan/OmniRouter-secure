@@ -190,7 +190,7 @@ def test_verify_api_key_passes_when_usage_absent(db):
     _config.VALID_API_KEYS.add(key)
     db.store[("api_keys", key)] = {"userid": "u1"}
     # no ('users', 'u1') doc at all
-    assert utils.verify_api_key(_Creds(key)) == key
+    assert utils.verify_api_key(_Creds(key)) == "u1"  # returns the resolved user id
 
 
 def test_verify_api_key_429_when_over_limit(db):
@@ -201,6 +201,21 @@ def test_verify_api_key_429_when_over_limit(db):
     with pytest.raises(utils.HTTPException) as exc:
         utils.verify_api_key(_Creds(key))
     assert exc.value.status_code == 429
+
+
+def test_verify_api_key_reads_api_keys_doc_only_once(db):
+    # The completion / reasoning / image routes reuse verify_api_key's return
+    # value instead of re-resolving the user -> only one api_keys read per request.
+    key = "omni-once"
+    _config.VALID_API_KEYS.add(key)
+    db.store[("api_keys", key)] = {"userid": "u9"}
+    db.store[("users", "u9")] = {"usage": {"total_tokens": 3}}
+    db.reads.clear()
+
+    assert utils.verify_api_key(_Creds(key)) == "u9"
+
+    api_key_reads = [r for r in db.reads if r[0] == "api_keys"]
+    assert len(api_key_reads) == 1
 
 
 # --------------------------------------------------------------------------

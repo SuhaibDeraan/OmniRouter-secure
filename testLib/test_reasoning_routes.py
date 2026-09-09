@@ -78,7 +78,6 @@ class ProviderMissingMethods:
 def usage_calls(monkeypatch):
     calls = []
     monkeypatch.setattr(reasoning_routes, "add_usage_to_user", lambda uid, n: calls.append((uid, n)))
-    monkeypatch.setattr(reasoning_routes, "get_user_id_by_api_key", lambda key: "user-1")
     return calls
 
 
@@ -86,8 +85,15 @@ def usage_calls(monkeypatch):
 def client():
     app = FastAPI()
     app.include_router(reasoning_routes.router)
-    app.dependency_overrides[verify_api_key] = lambda: "test-key"
+    # verify_api_key returns the resolved user id
+    app.dependency_overrides[verify_api_key] = lambda: "user-1"
     return TestClient(app, raise_server_exceptions=False)
+
+
+def _override_auth(client, exc):
+    def _dep():
+        raise exc
+    client.app.dependency_overrides[verify_api_key] = _dep
 
 
 def _set_route(monkeypatch, *, provider=None, raises=None):
@@ -114,23 +120,17 @@ def test_400_stays_400(client, monkeypatch, usage_calls, path):
 
 
 @pytest.mark.parametrize("path", ["/v1/reason/completions", "/v1/reason/completions/stream"])
-def test_401_stays_401(client, monkeypatch, usage_calls, path):
+def test_401_from_auth_is_returned_unchanged(client, monkeypatch, usage_calls, path):
     _set_route(monkeypatch, provider=FakeProvider(response=None))
-    monkeypatch.setattr(
-        reasoning_routes, "get_user_id_by_api_key",
-        lambda key: (_ for _ in ()).throw(HTTPException(status_code=401, detail="Invalid API key")),
-    )
+    _override_auth(client, HTTPException(status_code=401, detail="Invalid API key"))
     resp = client.post(path, json=_body())
     assert resp.status_code == 401
 
 
 @pytest.mark.parametrize("path", ["/v1/reason/completions", "/v1/reason/completions/stream"])
-def test_429_stays_429(client, monkeypatch, usage_calls, path):
+def test_429_from_auth_is_returned_unchanged(client, monkeypatch, usage_calls, path):
     _set_route(monkeypatch, provider=FakeProvider(response=None))
-    monkeypatch.setattr(
-        reasoning_routes, "get_user_id_by_api_key",
-        lambda key: (_ for _ in ()).throw(HTTPException(status_code=429, detail="quota")),
-    )
+    _override_auth(client, HTTPException(status_code=429, detail="quota"))
     resp = client.post(path, json=_body())
     assert resp.status_code == 429
 

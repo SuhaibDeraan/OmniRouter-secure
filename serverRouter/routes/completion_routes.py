@@ -5,7 +5,6 @@ from fastapi import APIRouter, Depends, HTTPException
 from serverRouter.routes.utils import (
     verify_api_key,
     get_model_and_provider,
-    get_user_id_by_api_key,
     add_usage_to_user,
 )
 from serverRouter.core.datamodels import (
@@ -57,13 +56,12 @@ def _usage_total_from_chunk(chunk):
 @router.post("/chat/completions")
 async def create_chat_completion(
     request: ChatCompletionRequest,
-    api_key: str = Depends(verify_api_key)
+    user_id: str = Depends(verify_api_key)
 ) -> ChatCompletionResponse:
     """Create a chat completion using the specified model."""
     try:
         model_name, provider = get_model_and_provider(request.model, CHAT_MODELS)
         request.model = model_name
-        user_id = get_user_id_by_api_key(api_key)
 
         response = await provider.chat_complete(request)
 
@@ -82,13 +80,12 @@ async def create_chat_completion(
 @router.post("/chat/completions/stream")
 async def create_chat_completion_stream(
     request: ChatCompletionRequest,
-    api_key: str = Depends(verify_api_key)
+    user_id: str = Depends(verify_api_key)
 ):
     """Create a streaming chat completion using the specified model."""
     try:
         model_name, provider = get_model_and_provider(request.model, CHAT_MODELS)
         request.model = model_name
-        user_id = get_user_id_by_api_key(api_key)
         response = await provider.chat_complete_stream(request)
     except HTTPException:
         raise
@@ -119,13 +116,12 @@ async def create_chat_completion_stream(
 @router.post("/images/generate")
 async def create_image(
     request: ImageGenerationRequest,
-    api_key: str = Depends(verify_api_key)
+    user_id: str = Depends(verify_api_key)
 ) -> ImageGenerationResponse:
     """Generate images using the specified model."""
     try:
         model_name, provider = get_model_and_provider(request.model, IMAGE_MODELS)
         request.model = model_name
-        user_id = get_user_id_by_api_key(api_key)
 
         response = await provider.generate_image(request)
 

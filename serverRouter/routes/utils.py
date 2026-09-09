@@ -5,6 +5,12 @@ from serverRouter.core import config
 security = HTTPBearer()
 
 def verify_api_key(credentials: HTTPAuthorizationCredentials = Security(security)) -> str:
+    """Authenticate the bearer token and enforce the token quota.
+
+    Returns the authenticated user's id. The completion / reasoning / image
+    routes use it directly for usage accounting so they don't repeat the
+    ``api_keys`` lookup that this function already performed.
+    """
     if credentials.credentials not in config.VALID_API_KEYS:
         raise HTTPException(
             status_code=401,
@@ -19,7 +25,7 @@ def verify_api_key(credentials: HTTPAuthorizationCredentials = Security(security
             status_code=429,
             detail="User has reached the maximum number of tokens"
         )
-    return credentials.credentials
+    return user_id
 
 def get_user_id_by_api_key(api_key):
     """

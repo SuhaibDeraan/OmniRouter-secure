@@ -84,7 +84,6 @@ class FakeProvider:
 def usage_calls(monkeypatch):
     calls = []
     monkeypatch.setattr(completion_routes, "add_usage_to_user", lambda uid, n: calls.append((uid, n)))
-    monkeypatch.setattr(completion_routes, "get_user_id_by_api_key", lambda key: "user-1")
     return calls
 
 
@@ -92,7 +91,8 @@ def usage_calls(monkeypatch):
 def client():
     app = FastAPI()
     app.include_router(completion_routes.router)
-    app.dependency_overrides[verify_api_key] = lambda: "test-key"
+    # verify_api_key returns the resolved user id
+    app.dependency_overrides[verify_api_key] = lambda: "user-1"
     return TestClient(app, raise_server_exceptions=False)
 
 
