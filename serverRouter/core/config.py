@@ -27,6 +27,16 @@ load_dotenv()
 PROVIDERS = {}
 MAX_TOKENS = 100000
 
+
+def _parse_cors_origins(raw):
+    return [origin.strip() for origin in (raw or "").split(",") if origin.strip()]
+
+
+# Browser cross-origin access is CLOSED by default. Set CORS_ALLOWED_ORIGINS to a
+# comma-separated list of exact origins (scheme + host + port) to open it for
+# just those. "*" combined with credentials is unsafe and is not supported here.
+CORS_ALLOWED_ORIGINS = _parse_cors_origins(os.getenv("CORS_ALLOWED_ORIGINS"))
+
 # --- auth cache ------------------------------------------------------------
 # Populated at startup and kept current by the api_keys snapshot listener.
 VALID_API_KEYS = set()

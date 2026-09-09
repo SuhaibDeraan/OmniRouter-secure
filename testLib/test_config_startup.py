@@ -261,3 +261,30 @@ def test_no_raw_credentials_on_module(monkeypatch):
     # the firestore module handle is still exposed for utils.py
     assert hasattr(cfg.firestore, "Increment")
     assert hasattr(cfg.firestore, "SERVER_TIMESTAMP")
+
+
+# --------------------------------------------------------------------------
+# CORS_ALLOWED_ORIGINS
+# --------------------------------------------------------------------------
+def test_cors_origins_default_closed(monkeypatch):
+    monkeypatch.delenv("CORS_ALLOWED_ORIGINS", raising=False)
+    cfg = _fresh_config(monkeypatch, _make_firebase_stub())
+    assert cfg.CORS_ALLOWED_ORIGINS == []
+
+
+def test_cors_origins_parsed_from_env(monkeypatch):
+    monkeypatch.setenv("CORS_ALLOWED_ORIGINS", " https://a.example.com , , https://b.example.com ")
+    cfg = _fresh_config(monkeypatch, _make_firebase_stub())
+    assert cfg.CORS_ALLOWED_ORIGINS == ["https://a.example.com", "https://b.example.com"]
+
+
+@pytest.mark.parametrize("raw,expected", [
+    (None, []),
+    ("", []),
+    ("   ", []),
+    ("https://a.com", ["https://a.com"]),
+    ("https://a.com,https://b.com", ["https://a.com", "https://b.com"]),
+])
+def test_parse_cors_origins_helper(monkeypatch, raw, expected):
+    cfg = _fresh_config(monkeypatch, _make_firebase_stub())
+    assert cfg._parse_cors_origins(raw) == expected
