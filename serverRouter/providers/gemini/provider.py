@@ -1,20 +1,25 @@
 # serverRouter/providers/gemini/provider.py
-from typing import Dict, Any, List, Union
-from google import generativeai as genai
+import asyncio
+import json
 import os
-from typing import Dict, Any, List, Union
+
+from google import generativeai as genai
+from dotenv import load_dotenv
+from sse_starlette.sse import EventSourceResponse
+
 from serverRouter.core.interfaces import ChatProvider
 from serverRouter.core.datamodels import (
     ChatCompletionRequest,
     ChatCompletionResponse,
-    ChatCompletionGenerator
+    ChatCompletionGenerator,
 )
 from serverRouter.core.exceptions import ProviderError
-from dotenv import load_dotenv
-import json
-from sse_starlette.sse import EventSourceResponse
 
 load_dotenv()
+
+# Sentinel marking the end of the synchronous streaming iterator.
+_STREAM_DONE = object()
+
 
 class GeminiProvider(ChatProvider):
     def __init__(self, api_key: str = None):
@@ -23,7 +28,6 @@ class GeminiProvider(ChatProvider):
             raise ProviderError("No GEMINI_API_KEY provided. Please add it to your .env file.")
         genai.configure(api_key=api_key)
 
-        
     async def chat_complete(self, request: ChatCompletionRequest) -> ChatCompletionResponse:
         try:
             messages = []
@@ -33,8 +37,10 @@ class GeminiProvider(ChatProvider):
 
             model = genai.GenerativeModel(model_name=request.model)
 
-            # Use synchronous version for simpler operation
-            response = model.generate_content(
+            # genai's generate_content is a blocking network call; run it off the
+            # event loop so concurrent requests are not serialized.
+            response = await asyncio.to_thread(
+                model.generate_content,
                 contents=messages,
                 generation_config=genai.types.GenerationConfig(
                     max_output_tokens=request.max_tokens or 2048,
@@ -55,10 +61,10 @@ class GeminiProvider(ChatProvider):
                 )
             else:
                 raise ProviderError("Empty response from Gemini API")
-                
+
         except Exception as e:
             raise ProviderError(f"Gemini API error (chat): {str(e)}")
-        
+
     async def chat_complete_stream(self, request: ChatCompletionRequest) -> ChatCompletionGenerator:
         async def event_generator():
             try:
@@ -68,7 +74,7 @@ class GeminiProvider(ChatProvider):
                     messages.append({"role": role, "parts": [msg.content]})
 
                 model = genai.GenerativeModel(model_name=request.model)
-                
+
                 # Send metadata event at the beginning
                 yield {
                     "event": "metadata",
@@ -77,8 +83,11 @@ class GeminiProvider(ChatProvider):
                         "provider": "gemini"
                     })
                 }
-                
-                response = model.generate_content(
+
+                # Opening the stream and pulling each chunk are blocking calls;
+                # keep them off the event loop while still yielding incrementally.
+                sync_stream = await asyncio.to_thread(
+                    model.generate_content,
                     contents=messages,
                     generation_config=genai.types.GenerationConfig(
                         max_output_tokens=request.max_tokens or 2048,
@@ -86,11 +95,15 @@ class GeminiProvider(ChatProvider):
                     ),
                     stream=True
                 )
-                
+                iterator = iter(sync_stream)
+
                 total_prompt_tokens = 0
                 total_completion_tokens = 0
 
-                for chunk in response:
+                while True:
+                    chunk = await asyncio.to_thread(next, iterator, _STREAM_DONE)
+                    if chunk is _STREAM_DONE:
+                        break
                     if chunk.text:
                         total_prompt_tokens = chunk.usage_metadata.prompt_token_count
                         total_completion_tokens = chunk.usage_metadata.candidates_token_count
@@ -107,7 +120,7 @@ class GeminiProvider(ChatProvider):
                         "total_tokens": total_prompt_tokens + total_completion_tokens
                     })
                 }
-                
+
             except Exception as e:
                 error_message = str(e)
                 yield {
@@ -115,7 +128,5 @@ class GeminiProvider(ChatProvider):
                     "data": json.dumps({"error": error_message})
                 }
                 raise ProviderError(f"Gemini API error (stream): {str(e)}")
-        
+
         return EventSourceResponse(event_generator())
-        
-        
